@@ -30,7 +30,7 @@ from mcp.types import ToolAnnotations
 
 from .caic import BAND_LABELS, CaicClient
 from .locations import LOCATIONS, resolve
-from .profile import Profiler, render
+from .profile import Profiler, _parse_timestamp, render
 from .store import Store
 
 DB_PATH = os.environ.get("CAIC_DB", "caic.db")
@@ -52,8 +52,13 @@ mcp = MCPServer(
         "something the brief surfaced.\n\n"
         "Always report the season context alongside the current rating: a moderate "
         "day on a persistent weak layer is not the same as a moderate day on a "
-        "settled snowpack. Never present this as a substitute for the official "
-        "CAIC forecast — link the reader to avalanche.state.co.us."
+        "settled snowpack.\n\n"
+        "Danger ratings expire. A forecast marked EXPIRED or superseded describes a "
+        "day that has passed — report it as history and never as today's rating, and "
+        "never fill a gap with a neighbouring day's numbers. Absent forecast data is "
+        "missing information, not a low rating; say so plainly rather than reasoning "
+        "around it. Never present any of this as a substitute for the official CAIC "
+        "forecast — link the reader to avalanche.state.co.us."
     ),
 )
 
@@ -257,7 +262,9 @@ def zone_digest(zone_slug: str, date: str) -> str:
     description=(
         "Fetch the avalanche forecast CAIC is publishing right now, live from their "
         "API. Use this for today's official danger ratings; the other tools read the "
-        "local archive, which is only as current as the last snapshot."
+        "local archive, which is only as current as the last snapshot. Each entry "
+        "carries a status of current or expired — report an expired forecast as "
+        "history, never as the present rating."
     ),
     annotations=LIVE,
 )
@@ -266,6 +273,7 @@ def current_forecast(zone: str | None = None) -> list[dict[str, Any]]:
     Args:
         zone: Optional zone name filter, e.g. "Front Range". Omit for every zone.
     """
+    now = dt.datetime.now(dt.timezone.utc)
     products = CaicClient().current_forecasts()
     out = []
     for p in products:
@@ -273,11 +281,13 @@ def current_forecast(zone: str | None = None) -> list[dict[str, Any]]:
         if zone and zone.lower() not in name.lower():
             continue
         days = (p.get("dangerRatings") or {}).get("days") or []
+        expires = _parse_timestamp(p.get("expiryDateTime"))
         out.append(
             {
                 "zone": name,
                 "issued": p.get("issueDateTime"),
                 "expires": p.get("expiryDateTime"),
+                "status": "expired" if expires is not None and expires <= now else "current",
                 "danger_by_day": [
                     {
                         "date": d.get("date"),

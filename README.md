@@ -98,9 +98,30 @@ The full design write-up, including the upstream findings behind these choices, 
 |---|---|
 | Avalanche observations | Full history, queryable by date range |
 | Field reports | Full history |
-| Forecasts | **Snapshot-only.** CAIC's products endpoint accepts a `datetime` parameter and ignores it — requests for two different dates return identical current products. There is no archive to backfill, so run `make snapshot` daily via cron and history accumulates from then on |
+| Forecasts | **Snapshot-only.** CAIC's products endpoint accepts a `datetime` parameter and ignores it — requests for two different dates return identical current products. There is no archive to backfill, so run `make snapshot` daily via cron and history accumulates from then on. Archived ratings are expiry-aware (see [Danger ratings expire](#danger-ratings-expire)) |
 | SNOTEL snowpack weather | Full history; water equivalent, depth, temperature |
 | Ridgetop wind | **Not covered.** Wind was the second most common problem in-sample, but SNOTEL does not measure it and there is no free JSON route. [Synoptic/MesoWest](https://synopticdata.com) carries CAIC's own stations and needs a token — the cheapest remaining unlock |
+
+## Danger ratings expire
+
+The [Avalanche.org public API terms](https://github.com/NationalAvalancheCenter/Avalanche.org-Public-API-Docs)
+state that *"because avalanche danger changes on a day-to-day basis, danger rating displays
+must be published and expired accordingly."* A rating is never returned bare. Every archived
+forecast carries one of four states:
+
+| State | Behaviour |
+|---|---|
+| `current` | Issued for the requested date and inside its validity window. Ratings shown, with the expiry time |
+| `expired` | Issued for the requested date but past expiry. Ratings shown, headed **EXPIRED** with the caveat before the numbers — legitimate for retrospective questions, never presented as today |
+| `superseded` | Nothing was issued for that date. **Ratings are withheld entirely.** The nearest forecast is reported as a pointer, not a substitute |
+| absent | Nothing archived at all. Reported as missing data, explicitly *not* a low rating |
+
+The `superseded` case is the one that matters. Before this was added, asking about a date
+with no forecast silently returned the nearest earlier day's ratings as if they applied —
+which is exactly what the terms forbid.
+
+The MCP server carries the same rule in its instructions, and `current_forecast` labels every
+live product `current` or `expired`.
 
 ## Testing
 
@@ -140,7 +161,7 @@ scripts/
 - The gazetteer covers six locations by hand. Production wants DEM-derived terrain per
   named zone.
 - Forecast history starts the day you begin snapshotting.
-- `risk_brief` reports a missing forecast as absent rather than refusing. Before this goes
-  in front of real backcountry users, it should refuse.
+- Off-season, CAIC's products endpoint returns polygon ID lists in place of readable zone
+  names, so `current_forecast` zone labels are unhelpful until the season starts.
 - Everything rides undocumented endpoints. A personal tool is one thing; a public service
   polling them is a conversation worth having with CAIC first.

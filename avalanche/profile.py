@@ -31,6 +31,17 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * EARTH_MILES * math.asin(math.sqrt(a))
 
 
+def _parse_timestamp(value: str | None) -> dt.datetime | None:
+    """Parse a CAIC timestamp, which is ISO-8601 with a trailing ``Z``."""
+    if not value:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
+
+
 @dataclass
 class Brief:
     location: Location
@@ -68,28 +79,70 @@ class Profiler:
 
     # ------------------------------------------------------------------ bits
 
-    def _forecast(self, zone: str, on: str) -> dict[str, Any] | None:
+    def _forecast(self, zone: str, on: str, now: dt.datetime | None = None) -> dict[str, Any] | None:
+        """The archived forecast for a date, labelled with how far it can be trusted.
+
+        Avalanche.org's terms are explicit that "danger rating displays must be
+        published and expired accordingly", so a rating is never returned bare.
+        Three outcomes:
+
+        ``current``     issued for this date and still inside its validity window.
+        ``expired``     issued for this date but past its expiry. Legitimate for
+                        retrospective questions; must be shown labelled, never as
+                        today's rating.
+        ``superseded``  nothing was issued for this date. Ratings are withheld
+                        entirely — the nearest forecast is reported as a pointer,
+                        not as a substitute.
+        """
+        now = now or dt.datetime.now(dt.timezone.utc)
+
         row = self.store.conn.execute(
-            "SELECT * FROM forecast WHERE zone LIKE ? AND valid_date <= ? "
-            "ORDER BY valid_date DESC, captured_at DESC LIMIT 1",
+            "SELECT * FROM forecast WHERE zone LIKE ? AND valid_date = ? "
+            "ORDER BY captured_at DESC LIMIT 1",
             (f"%{zone}%", on),
         ).fetchone()
-        if not row:
-            return None
-        return {
+
+        if row is not None:
+            expires = _parse_timestamp(row["expires_at"])
+            status = "expired" if expires is not None and expires <= now else "current"
+        else:
+            row = self.store.conn.execute(
+                "SELECT * FROM forecast WHERE zone LIKE ? AND valid_date < ? "
+                "ORDER BY valid_date DESC, captured_at DESC LIMIT 1",
+                (f"%{zone}%", on),
+            ).fetchone()
+            if row is None:
+                return None
+            status = "superseded"
+
+        forecast = {
             "zone": row["zone"],
+            "status": status,
             "valid_date": row["valid_date"],
+            "issued_at": row["issued_at"],
+            "expires_at": row["expires_at"],
             "captured_at": row["captured_at"],
-            "danger": {
-                "above treeline": row["danger_alp"],
-                "near treeline": row["danger_tln"],
-                "below treeline": row["danger_btl"],
-            },
-            "problems": json.loads(row["problems"] or "[]"),
-            "snowpack_summary": row["snowpack_summary"],
-            "avalanche_summary": row["avalanche_summary"],
-            "travel_advice": row["travel_advice"],
         }
+
+        # A superseded forecast says nothing about the requested date, so its
+        # ratings and narrative are withheld rather than shown out of context.
+        if status == "superseded":
+            return forecast
+
+        forecast.update(
+            {
+                "danger": {
+                    "above treeline": row["danger_alp"],
+                    "near treeline": row["danger_tln"],
+                    "below treeline": row["danger_btl"],
+                },
+                "problems": json.loads(row["problems"] or "[]"),
+                "snowpack_summary": row["snowpack_summary"],
+                "avalanche_summary": row["avalanche_summary"],
+                "travel_advice": row["travel_advice"],
+            }
+        )
+        return forecast
 
     def _rose(self, loc: Location, start: str, end: str) -> tuple[dict, int]:
         rows = self.store.conn.execute(
@@ -264,6 +317,11 @@ class Profiler:
         )
 
 
+def _format_timestamp(value: str | None) -> str:
+    parsed = _parse_timestamp(value)
+    return parsed.strftime("%Y-%m-%d %H:%M UTC") if parsed else "unknown"
+
+
 def render(brief: Brief) -> str:
     """Render a brief as the Markdown an assistant would ground its answer in."""
     loc = brief.location
@@ -271,8 +329,40 @@ def render(brief: Brief) -> str:
     out = [f"# {loc.name} — {brief.as_of}", "", f"*{header}*", ""]
 
     fc = brief.forecast
-    if fc:
-        out += [f"## Forecast (valid {fc['valid_date']})", ""]
+    if fc is None:
+        out += [
+            "## Forecast",
+            "",
+            "**No archived forecast covers this date.** This is missing data, not a low "
+            "danger rating. Check the official forecast at avalanche.state.co.us.",
+            "",
+        ]
+    elif fc["status"] == "superseded":
+        # Ratings are deliberately withheld: showing a rating issued for another
+        # day as though it applied here is exactly what the terms of use forbid.
+        out += [
+            "## Forecast",
+            "",
+            f"**No forecast was issued for {brief.as_of}.** The nearest archived one is "
+            f"from {fc['valid_date']}; its ratings are withheld because avalanche danger "
+            "changes day to day and they say nothing about this date. Check the official "
+            "forecast at avalanche.state.co.us.",
+            "",
+        ]
+    else:
+        expired = fc["status"] == "expired"
+        heading = "## Forecast — EXPIRED" if expired else "## Forecast"
+        out += [heading, ""]
+        if expired:
+            out += [
+                f"> Issued for {fc['valid_date']}, expired {_format_timestamp(fc['expires_at'])}. "
+                "Shown for historical context — **not a current rating.** For today's "
+                "conditions see avalanche.state.co.us.",
+                "",
+            ]
+        else:
+            out += [f"*Valid {fc['valid_date']}, expires {_format_timestamp(fc['expires_at'])}.*", ""]
+
         for band, rating in fc["danger"].items():
             out.append(f"- **{band}:** {rating or 'no rating'}")
         out.append("")
@@ -280,8 +370,6 @@ def render(brief: Brief) -> str:
             out.append(f"- Problem: {p.get('type')} — {p.get('likelihood')} likelihood")
         if fc.get("snowpack_summary"):
             out += ["", "**Snowpack:** " + fc["snowpack_summary"], ""]
-    else:
-        out += ["## Forecast", "", "_No archived forecast covering this date._", ""]
 
     out += [f"## Season to date — {brief.season_total} avalanches on comparable terrain", ""]
     if brief.season_rose:
