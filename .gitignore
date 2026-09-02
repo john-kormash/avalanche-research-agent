@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+.venv-*/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Local data — regenerate with `make seed`
+*.db
+digests/
+.env
