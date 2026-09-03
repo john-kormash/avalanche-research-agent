@@ -1,4 +1,4 @@
-# caic-avalanche-search
+# avalanche-research-agent
 
 Agentic search over [Colorado Avalanche Information Center](https://avalanche.state.co.us)
 data, exposed as an MCP server.
@@ -38,8 +38,8 @@ Once `make seed` has populated `caic.db`:
 {
   "mcpServers": {
     "caic": {
-      "command": "/absolute/path/to/caic-avalanche-search/.venv/bin/caic-mcp",
-      "env": { "CAIC_DB": "/absolute/path/to/caic-avalanche-search/caic.db" }
+      "command": "/absolute/path/to/avalanche-research-agent/.venv/bin/caic-mcp",
+      "env": { "CAIC_DB": "/absolute/path/to/avalanche-research-agent/caic.db" }
     }
   }
 }
