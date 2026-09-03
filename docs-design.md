@@ -21,12 +21,13 @@ Three findings from probing the live API drove every design decision here.
 sample from January 2026, free text ran a median of ~400 characters — a sentence or two
 of observer colour. The signal is in the columns.
 
-**2. There is no forecast archive.** The `api-proxy/avid` products endpoint accepts a
-`datetime` parameter and ignores it: requests for 2026-01-25 and 2026-03-10 both returned
-the identical currently-published products. Observations *are* queryable historically via
-`r[observed_at_gteq]`/`r[observed_at_lteq]`, but forecasts are only ever available as
-"now". **A season of forecast history exists only if you start capturing it daily before
-the season starts.**
+**2. Forecast history is available, but the parameters fight each other.** The
+`api-proxy/avid` products endpoint honours `datetime` — *unless* `includeExpired=true` is
+sent alongside it, in which case it returns today's products and silently ignores the date.
+An early version of this project sent both and concluded, wrongly, that no archive existed.
+The site's own React bundle branches between the two rather than combining them. Forecast
+areas are also grouped dynamically per day, so locations must be matched geometrically
+against each date's area GeoJSON rather than by name.
 
 **3. Zones are not places.** CAIC forecasts "Front Range". People ask about Berthoud Pass.
 Nothing upstream bridges that, and it is the highest-leverage piece to own.

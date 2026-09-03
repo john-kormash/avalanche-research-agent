@@ -16,7 +16,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from avalanche.caic import CaicClient  # noqa: E402
+from avalanche.caic import CaicClient, resolve_forecasts_by_location  # noqa: E402
 from avalanche.locations import LOCATIONS  # noqa: E402
 from avalanche.store import Store  # noqa: E402
 from avalanche.weather import SnotelClient, derive  # noqa: E402
@@ -57,8 +57,14 @@ def main() -> int:
     n = store.add_reports(caic.observation_reports(start, end))
     print(f"  {n} records")
 
-    print("Forecast snapshot (today's products; CAIC publishes no archive)…")
-    print(f"  {store.add_forecast_snapshot(caic.current_forecasts())} day-rows")
+    print("Forecasts…")
+    day, rows, days_covered = start, 0, 0
+    while day <= end:
+        resolved = resolve_forecasts_by_location(caic, day, LOCATIONS.values())
+        rows += sum(store.add_forecasts(products, name) for name, products in resolved.items())
+        days_covered += 1 if resolved else 0
+        day += dt.timedelta(days=1)
+    print(f"  {rows} day-rows over {days_covered} forecast days")
 
     if not args.skip_weather:
         print("SNOTEL snowpack weather…")

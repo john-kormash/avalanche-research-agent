@@ -332,8 +332,8 @@ def coverage() -> str:
                 f"- Archived forecast day-rows: {fc['n']}",
                 "",
                 "## Known gaps",
-                "- CAIC publishes no forecast archive, so forecast history only goes back",
-                "  to the first local snapshot. Run `avalanche snapshot` daily.",
+                "- Forecast history is fetched on demand, one date per request, so it",
+                "  covers whatever range `avalanche forecasts` has been run for.",
                 "- Ridgetop wind is not covered; SNOTEL does not measure it.",
             ]
         )

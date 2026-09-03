@@ -27,12 +27,30 @@ def test_snotel_rows_land_with_station_coordinates(populated):
     assert row["station"] == "Berthoud Summit"
 
 
-def test_forecast_snapshots_accumulate_rather_than_replace(store, forecast_products):
-    """CAIC publishes no archive, so each snapshot must be kept, not overwritten."""
-    store.add_forecast_snapshot(forecast_products, captured_at="2026-03-09T12:00:00Z")
-    store.add_forecast_snapshot(forecast_products, captured_at="2026-03-10T12:00:00Z")
-    captures = store.conn.execute("SELECT DISTINCT captured_at FROM forecast").fetchall()
-    assert len(captures) == 2
+def test_recapturing_a_forecast_day_updates_it_in_place(store, forecast_products):
+    """Forecasts are keyed by location and valid date, so a re-fetch refreshes.
+
+    Historical forecasts are retrievable from CAIC on demand, so the archive is
+    a cache rather than the only copy: re-running a backfill must converge on one
+    authoritative row per location per day instead of piling up duplicates.
+    """
+    store.add_forecasts(forecast_products, "Berthoud Pass", captured_at="2026-03-09T12:00:00Z")
+    first = store.conn.execute("SELECT COUNT(*) c FROM forecast").fetchone()["c"]
+
+    store.add_forecasts(forecast_products, "Berthoud Pass", captured_at="2026-03-10T12:00:00Z")
+    second = store.conn.execute("SELECT COUNT(*) c FROM forecast").fetchone()["c"]
+
+    assert second == first, "re-fetching the same forecast day duplicated rows"
+    latest = store.conn.execute("SELECT DISTINCT captured_at FROM forecast").fetchall()
+    assert [r["captured_at"] for r in latest] == ["2026-03-10T12:00:00Z"]
+
+
+def test_forecasts_are_stored_per_location(store, forecast_products):
+    """One CAIC forecast area can cover several named locations."""
+    store.add_forecasts(forecast_products, "Berthoud Pass")
+    store.add_forecasts(forecast_products, "Loveland Pass")
+    locations = store.conn.execute("SELECT DISTINCT location FROM forecast").fetchall()
+    assert {r["location"] for r in locations} == {"Berthoud Pass", "Loveland Pass"}
 
 
 def test_digests_render_one_file_per_zone_day(populated, tmp_path):

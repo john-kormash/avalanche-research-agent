@@ -3,7 +3,7 @@ VENV   := .venv
 BIN    := $(VENV)/bin
 DB     ?= caic.db
 
-.PHONY: help setup test lint seed snapshot smoke digests fixtures clean
+.PHONY: help setup test lint seed snapshot forecasts smoke digests fixtures clean
 
 help:
 	@echo "make setup     create the venv and install with dev extras"
@@ -11,6 +11,7 @@ help:
 	@echo "make lint      ruff check"
 	@echo "make seed      populate $(DB) with the current season (hits the network)"
 	@echo "make snapshot  archive today's forecast (run daily via cron)"
+	@echo "make forecasts backfill historical forecasts for the season"
 	@echo "make smoke     drive the MCP server over stdio as a client would"
 	@echo "make digests   render human-readable Markdown digests"
 	@echo "make fixtures  refresh recorded API payloads used by the tests"
@@ -34,6 +35,9 @@ seed:
 
 snapshot:
 	CAIC_DB=$(DB) $(BIN)/avalanche --db $(DB) snapshot
+
+forecasts:
+	CAIC_DB=$(DB) $(BIN)/avalanche --db $(DB) forecasts --start $(START) --end $(END)
 
 smoke:
 	CAIC_DB=$(DB) $(BIN)/python scripts/smoke_test.py

@@ -63,9 +63,12 @@ CREATE TABLE IF NOT EXISTS report (
 );
 CREATE INDEX IF NOT EXISTS report_zone_date ON report(zone_slug, observed_at);
 
--- Forecasts have no upstream archive, so each daily snapshot is appended here.
+-- One row per location per forecast day. CAIC groups its zones dynamically, so
+-- the location is resolved geometrically at ingest rather than stored as a name.
 CREATE TABLE IF NOT EXISTS forecast (
     id TEXT,
+    location TEXT,
+    area_id TEXT,
     captured_at TEXT,
     issued_at TEXT,
     expires_at TEXT,
@@ -80,9 +83,9 @@ CREATE TABLE IF NOT EXISTS forecast (
     avalanche_summary TEXT,
     travel_advice TEXT,
     problems TEXT,
-    PRIMARY KEY (id, day_offset, captured_at)
+    PRIMARY KEY (location, valid_date, id, day_offset)
 );
-CREATE INDEX IF NOT EXISTS forecast_zone_date ON forecast(zone, valid_date);
+CREATE INDEX IF NOT EXISTS forecast_location_date ON forecast(location, valid_date);
 
 -- Daily SNOTEL series, one row per station per day, with loading/warming flags.
 CREATE TABLE IF NOT EXISTS snotel (
@@ -204,7 +207,13 @@ class Store:
         self.conn.commit()
         return len(rows)
 
-    def add_forecast_snapshot(self, products: Iterable[dict], captured_at: str | None = None) -> int:
+    def add_forecasts(
+        self,
+        products: Iterable[dict],
+        location: str,
+        captured_at: str | None = None,
+    ) -> int:
+        """Store the forecast days of products already resolved to one location."""
         captured_at = captured_at or dt.datetime.now(dt.timezone.utc).isoformat()
         rows = []
         for p in products:
@@ -215,6 +224,8 @@ class Store:
                 rows.append(
                     (
                         p.get("id"),
+                        location,
+                        p.get("areaId"),
                         captured_at,
                         p.get("issueDateTime"),
                         p.get("expiryDateTime"),

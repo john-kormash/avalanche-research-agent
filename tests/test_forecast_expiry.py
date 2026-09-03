@@ -69,7 +69,7 @@ def test_unparseable_timestamps_are_none_rather_than_raising(value):
 def test_a_live_forecast_is_current(populated, brief_for):
     """Expiry in the future — the rating stands."""
     future = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=400)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    populated.add_forecast_snapshot(make_forecast("2026-03-09", future))
+    populated.add_forecasts(make_forecast("2026-03-09", future), "Berthoud Pass")
     fc = brief_for("2026-03-09").forecast
     assert fc["status"] == "current"
     assert fc["danger"]["above treeline"] == "considerable"
@@ -77,7 +77,7 @@ def test_a_live_forecast_is_current(populated, brief_for):
 
 def test_a_past_forecast_is_marked_expired_but_still_readable(populated, brief_for):
     """Retrospective questions are legitimate; the label carries the caveat."""
-    populated.add_forecast_snapshot(make_forecast("2026-03-09", "2026-03-10T04:30:00.000Z"))
+    populated.add_forecasts(make_forecast("2026-03-09", "2026-03-10T04:30:00.000Z"), "Berthoud Pass")
     fc = brief_for("2026-03-09").forecast
     assert fc["status"] == "expired"
     assert fc["danger"]["above treeline"] == "considerable"
@@ -85,7 +85,7 @@ def test_a_past_forecast_is_marked_expired_but_still_readable(populated, brief_f
 
 def test_a_forecast_from_another_day_is_superseded_and_withholds_ratings(populated, brief_for):
     """The core fix: yesterday's numbers must not stand in for today's."""
-    populated.add_forecast_snapshot(make_forecast("2026-03-09", "2026-03-10T04:30:00.000Z"))
+    populated.add_forecasts(make_forecast("2026-03-09", "2026-03-10T04:30:00.000Z"), "Berthoud Pass")
     fc = brief_for("2026-03-12").forecast
     assert fc["status"] == "superseded"
     assert fc["valid_date"] == "2026-03-09"
@@ -100,12 +100,14 @@ def test_no_forecast_at_all_returns_none(populated, brief_for):
 
 def test_the_newest_snapshot_of_a_day_wins(populated, brief_for):
     """Forecasts are reissued; the latest capture for that date is authoritative."""
-    populated.add_forecast_snapshot(
+    populated.add_forecasts(
         make_forecast("2026-03-09", "2026-03-10T04:30:00.000Z", danger="moderate"),
+        "Berthoud Pass",
         captured_at="2026-03-09T06:00:00Z",
     )
-    populated.add_forecast_snapshot(
+    populated.add_forecasts(
         make_forecast("2026-03-09", "2026-03-10T04:30:00.000Z", danger="high"),
+        "Berthoud Pass",
         captured_at="2026-03-09T15:00:00Z",
     )
     assert brief_for("2026-03-09").forecast["danger"]["above treeline"] == "high"
@@ -115,7 +117,7 @@ def test_the_newest_snapshot_of_a_day_wins(populated, brief_for):
 
 
 def test_expired_render_says_so_before_showing_numbers(populated, brief_for):
-    populated.add_forecast_snapshot(make_forecast("2026-03-09", "2026-03-10T04:30:00.000Z"))
+    populated.add_forecasts(make_forecast("2026-03-09", "2026-03-10T04:30:00.000Z"), "Berthoud Pass")
     text = render(brief_for("2026-03-09"))
     assert "EXPIRED" in text
     assert "not a current rating" in text
@@ -124,7 +126,7 @@ def test_expired_render_says_so_before_showing_numbers(populated, brief_for):
 
 
 def test_superseded_render_shows_no_rating_at_all(populated, brief_for):
-    populated.add_forecast_snapshot(make_forecast("2026-03-09", "2026-03-10T04:30:00.000Z"))
+    populated.add_forecasts(make_forecast("2026-03-09", "2026-03-10T04:30:00.000Z"), "Berthoud Pass")
     text = render(brief_for("2026-03-12"))
     assert "No forecast was issued for 2026-03-12" in text
     for rating in ("considerable", "moderate"):
@@ -139,7 +141,7 @@ def test_missing_forecast_reads_as_missing_data_not_as_safety(populated, brief_f
 
 def test_current_render_states_the_validity_window(populated, brief_for):
     future = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=400)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    populated.add_forecast_snapshot(make_forecast("2026-03-09", future))
+    populated.add_forecasts(make_forecast("2026-03-09", future), "Berthoud Pass")
     text = render(brief_for("2026-03-09"))
     assert "EXPIRED" not in text
     assert "expires" in text

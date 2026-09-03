@@ -97,9 +97,9 @@ class Profiler:
         now = now or dt.datetime.now(dt.timezone.utc)
 
         row = self.store.conn.execute(
-            "SELECT * FROM forecast WHERE zone LIKE ? AND valid_date = ? "
-            "ORDER BY captured_at DESC LIMIT 1",
-            (f"%{zone}%", on),
+            "SELECT * FROM forecast WHERE location = ? AND valid_date = ? "
+            "ORDER BY captured_at DESC, day_offset ASC LIMIT 1",
+            (zone, on),
         ).fetchone()
 
         if row is not None:
@@ -107,9 +107,9 @@ class Profiler:
             status = "expired" if expires is not None and expires <= now else "current"
         else:
             row = self.store.conn.execute(
-                "SELECT * FROM forecast WHERE zone LIKE ? AND valid_date < ? "
+                "SELECT * FROM forecast WHERE location = ? AND valid_date < ? "
                 "ORDER BY valid_date DESC, captured_at DESC LIMIT 1",
-                (f"%{zone}%", on),
+                (zone, on),
             ).fetchone()
             if row is None:
                 return None
@@ -305,7 +305,7 @@ class Profiler:
         return Brief(
             location=loc,
             as_of=on.isoformat(),
-            forecast=self._forecast(loc.zone, on.isoformat()),
+            forecast=self._forecast(loc.name, on.isoformat()),
             season_rose=rose,
             season_total=total,
             recent=recent,
@@ -315,6 +315,27 @@ class Profiler:
             weather=weather,
             notes=notes,
         )
+
+
+def _summarize_rose(aspect_elevations: list[str]) -> str:
+    """Turn ``["n_alp", "ne_alp", ...]`` into "above treeline: N, NE".
+
+    This is the forecaster's own aspect/elevation rose, and it shares its shape
+    with the observed rose computed from avalanche records — which is what makes
+    the two directly comparable.
+    """
+    bands: dict[str, list[str]] = {}
+    for token in aspect_elevations:
+        aspect, _, band = token.rpartition("_")
+        if aspect and band in BAND_LABELS:
+            bands.setdefault(band, []).append(aspect.upper())
+    order = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+    parts = []
+    for band in ("alp", "tln", "btl"):
+        if band in bands:
+            aspects = sorted(set(bands[band]), key=lambda a: order.index(a) if a in order else 99)
+            parts.append(f"{BAND_LABELS[band]}: {', '.join(aspects)}")
+    return "; ".join(parts)
 
 
 def _format_timestamp(value: str | None) -> str:
@@ -367,7 +388,14 @@ def render(brief: Brief) -> str:
             out.append(f"- **{band}:** {rating or 'no rating'}")
         out.append("")
         for p in fc["problems"]:
-            out.append(f"- Problem: {p.get('type')} — {p.get('likelihood')} likelihood")
+            line = f"- Problem: {p.get('type')} — {p.get('likelihood')} likelihood"
+            size = p.get("expectedSize") or {}
+            if size.get("min") and size.get("max"):
+                line += f", D{size['min']}–D{size['max']}"
+            out.append(line)
+            rose = _summarize_rose(p.get("aspectElevations") or [])
+            if rose:
+                out.append(f"    on {rose}")
         if fc.get("snowpack_summary"):
             out += ["", "**Snowpack:** " + fc["snowpack_summary"], ""]
 

@@ -14,7 +14,7 @@ import json
 import re
 import sys
 
-from .caic import CaicClient
+from .caic import CaicClient, resolve_forecasts_by_location
 from .locations import LOCATIONS, resolve
 from .profile import Profiler, render
 from .store import Store
@@ -57,8 +57,31 @@ def cmd_weather(args, store: Store) -> int:
 
 
 def cmd_snapshot(args, store: Store) -> int:
-    n = store.add_forecast_snapshot(CaicClient().current_forecasts())
-    print(f"archived {n} forecast day-rows")
+    """Archive today's forecasts, resolved to each known location."""
+    client = CaicClient()
+    resolved = resolve_forecasts_by_location(client, dt.date.today(), LOCATIONS.values())
+    total = sum(store.add_forecasts(products, name) for name, products in resolved.items())
+    print(f"archived {total} forecast day-rows across {len(resolved)} locations")
+    return 0
+
+
+def cmd_forecasts(args, store: Store) -> int:
+    """Backfill historical forecasts day by day.
+
+    CAIC serves past forecasts through the same products endpoint, one date at a
+    time — there is no bulk range — so this walks the season a day per request.
+    """
+    client = CaicClient()
+    day, total, covered = args.start, 0, 0
+    while day <= args.end:
+        resolved = resolve_forecasts_by_location(client, day, LOCATIONS.values())
+        rows = sum(store.add_forecasts(products, name) for name, products in resolved.items())
+        total += rows
+        covered += 1 if resolved else 0
+        if rows:
+            print(f"  {day}  {len(resolved)} locations, {rows} day-rows")
+        day += dt.timedelta(days=1)
+    print(f"backfilled {total} forecast day-rows over {covered} forecast days")
     return 0
 
 
@@ -116,6 +139,11 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("snapshot", help="archive today's forecasts (run daily)")
     p.set_defaults(func=cmd_snapshot)
+
+    p = sub.add_parser("forecasts", help="backfill historical forecasts")
+    p.add_argument("--start", type=_date, required=True)
+    p.add_argument("--end", type=_date, required=True)
+    p.set_defaults(func=cmd_forecasts)
 
     p = sub.add_parser("weather", help="ingest SNOTEL snowpack weather")
     p.add_argument("--start", type=_date, required=True)

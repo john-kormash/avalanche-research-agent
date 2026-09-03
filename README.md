@@ -24,7 +24,7 @@ questions against it:
 
 ```bash
 make setup     # venv + dependencies
-make seed      # pull the current season (a few minutes; hits the network)
+make seed      # pull the current season (several minutes; hits the network)
 make smoke     # drive the MCP server over stdio, as a client would
 make test      # offline test suite
 ```
@@ -98,9 +98,36 @@ The full design write-up, including the upstream findings behind these choices, 
 |---|---|
 | Avalanche observations | Full history, queryable by date range |
 | Field reports | Full history |
-| Forecasts | **Snapshot-only.** CAIC's products endpoint accepts a `datetime` parameter and ignores it — requests for two different dates return identical current products. There is no archive to backfill, so run `make snapshot` daily via cron and history accumulates from then on. Archived ratings are expiry-aware (see [Danger ratings expire](#danger-ratings-expire)) |
+| Forecasts | **Full history**, one date per request. Danger ratings by elevation band, plus each avalanche problem's own aspect/elevation rose, likelihood and expected size. Ratings are expiry-aware (see [Danger ratings expire](#danger-ratings-expire)) |
 | SNOTEL snowpack weather | Full history; water equivalent, depth, temperature |
 | Ridgetop wind | **Not covered.** Wind was the second most common problem in-sample, but SNOTEL does not measure it and there is no free JSON route. [Synoptic/MesoWest](https://synopticdata.com) carries CAIC's own stations and needs a token — the cheapest remaining unlock |
+
+## Historical forecasts
+
+CAIC's products endpoint serves past forecasts, but the parameter interaction is a trap
+worth knowing about:
+
+```
+/products/all?datetime=2026-03-09T19:00:00.000Z     # the forecast issued for that day
+/products/all?includeExpired=true                    # today's products
+/products/all?datetime=...&includeExpired=true       # today's products — date IGNORED
+```
+
+`datetime` and `includeExpired` are **mutually exclusive**. Sending both returns a 200 with
+current data and silently drops the date, which is exactly what the site's own React bundle
+avoids by branching on whether the requested day is today. `tests/test_historical_forecasts.py`
+pins the request shape so this cannot regress.
+
+Forecast areas are matched **geometrically**, not by name. CAIC groups its zones dynamically —
+the same terrain belongs to a differently-shaped forecast area from one day to the next, and
+`publicName` is a list of polygon IDs rather than anything readable. So each date's
+`/products/all/area` GeoJSON is point-in-polygon tested against each known location, and
+forecasts are stored per location per day.
+
+The payoff is that the forecaster's own aspect/elevation rose becomes comparable to the
+observed one. For Berthoud Pass on 9 March 2026 the forecast called persistent slab on
+`N, NE, E, SE` above treeline — and the observations that week ran on N, NE, E and SE above
+treeline. Two independent sources agreeing is a far stronger signal than either alone.
 
 ## Danger ratings expire
 
@@ -113,7 +140,7 @@ forecast carries one of four states:
 |---|---|
 | `current` | Issued for the requested date and inside its validity window. Ratings shown, with the expiry time |
 | `expired` | Issued for the requested date but past expiry. Ratings shown, headed **EXPIRED** with the caveat before the numbers — legitimate for retrospective questions, never presented as today |
-| `superseded` | Nothing was issued for that date. **Ratings are withheld entirely.** The nearest forecast is reported as a pointer, not a substitute |
+| `superseded` | Nothing was issued for that date — a closed season, or terrain outside every forecast area. **Ratings are withheld entirely.** The nearest forecast is reported as a pointer, not a substitute |
 | absent | Nothing archived at all. Reported as missing data, explicitly *not* a low rating |
 
 The `superseded` case is the one that matters. Before this was added, asking about a date
@@ -160,7 +187,8 @@ scripts/
 
 - The gazetteer covers six locations by hand. Production wants DEM-derived terrain per
   named zone.
-- Forecast history starts the day you begin snapshotting.
+- Adding a location to the gazetteer means re-running `avalanche forecasts` for it: the
+  geometric match happens at ingest, not at query time.
 - Off-season, CAIC's products endpoint returns polygon ID lists in place of readable zone
   names, so `current_forecast` zone labels are unhelpful until the season starts.
 - Everything rides undocumented endpoints. A personal tool is one thing; a public service
